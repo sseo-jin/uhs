@@ -22,10 +22,12 @@ const positionIcon = (type: string) => {
   return Music;
 };
 
-export default function SongDetail({ song, onBack, onUpdated: _onUpdated }: Props) {
+export default function SongDetail({ song, onBack, onUpdated }: Props) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingInfo, setEditingInfo] = useState(false);
+  const [infoForm, setInfoForm] = useState({ title: song.title, artist: song.artist });
   const [addingPosition, setAddingPosition] = useState(false);
   const [newPositionType, setNewPositionType] = useState(POSITION_TYPES[0]);
   const [customPositionType, setCustomPositionType] = useState("");
@@ -47,6 +49,13 @@ export default function SongDetail({ song, onBack, onUpdated: _onUpdated }: Prop
   }, [song.id]);
 
   useEffect(() => { fetchPositions(); }, [fetchPositions]);
+
+  async function handleInfoSave() {
+    if (!infoForm.title.trim()) return;
+    await supabase.from("songs").update({ title: infoForm.title.trim(), artist: infoForm.artist.trim() }).eq("id", song.id);
+    onUpdated({ ...song, title: infoForm.title.trim(), artist: infoForm.artist.trim() });
+    setEditingInfo(false);
+  }
 
   async function handleMemberAssign(positionId: string, memberId: string | null) {
     await supabase.from("positions").update({ member_id: memberId }).eq("id", positionId);
@@ -130,14 +139,55 @@ export default function SongDetail({ song, onBack, onUpdated: _onUpdated }: Prop
       <div className="flex items-center gap-3">
         <button
           onClick={onBack}
-          className="p-2 rounded-xl text-[#6b7fa3] hover:text-[#38d1f7] hover:bg-[#38d1f7]/10 transition-all"
+          className="p-2 rounded-xl text-[#6b7fa3] hover:text-[#38d1f7] hover:bg-[#38d1f7]/10 transition-all flex-shrink-0"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
-        <div className="min-w-0">
-          <h2 className="text-lg font-bold text-[#e8f0ff] truncate">{song.title}</h2>
-          {song.artist && <p className="text-xs text-[#6b7fa3]">{song.artist}</p>}
-        </div>
+
+        {editingInfo ? (
+          <div className="flex-1 flex items-center gap-2 min-w-0">
+            <div className="flex-1 space-y-1.5 min-w-0">
+              <input
+                type="text"
+                value={infoForm.title}
+                onChange={(e) => setInfoForm({ ...infoForm, title: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && handleInfoSave()}
+                placeholder="곡 제목"
+                autoFocus
+                className="w-full bg-[#080c14] border border-[#38d1f7]/40 rounded-lg px-3 py-1.5 text-sm font-bold text-[#e8f0ff] placeholder:text-[#2a3a5a] focus:outline-none"
+              />
+              <input
+                type="text"
+                value={infoForm.artist}
+                onChange={(e) => setInfoForm({ ...infoForm, artist: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && handleInfoSave()}
+                placeholder="아티스트"
+                className="w-full bg-[#080c14] border border-[#1a2540] rounded-lg px-3 py-1.5 text-xs text-[#e8f0ff] placeholder:text-[#2a3a5a] focus:outline-none focus:border-[#38d1f7]/40"
+              />
+            </div>
+            <button onClick={handleInfoSave}
+              className="p-2 bg-[#39ff88]/15 text-[#39ff88] rounded-lg hover:bg-[#39ff88]/25 transition-colors flex-shrink-0">
+              <Save className="w-4 h-4" />
+            </button>
+            <button onClick={() => { setEditingInfo(false); setInfoForm({ title: song.title, artist: song.artist }); }}
+              className="p-2 text-[#6b7fa3] hover:text-[#e8f0ff] rounded-lg transition-colors flex-shrink-0">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center gap-2 min-w-0">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-lg font-bold text-[#e8f0ff] truncate">{song.title}</h2>
+              {song.artist && <p className="text-xs text-[#6b7fa3]">{song.artist}</p>}
+            </div>
+            <button
+              onClick={() => { setEditingInfo(true); setInfoForm({ title: song.title, artist: song.artist }); }}
+              className="p-2 text-[#2a3a5a] hover:text-[#38d1f7] hover:bg-[#38d1f7]/10 rounded-lg transition-all flex-shrink-0"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Positions */}
