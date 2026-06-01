@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, Users, Check } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getDaysInMonth, getFirstDayOfMonth, toDateString } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -24,14 +24,26 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const [myVotes, setMyVotes] = useState<Set<string>>(new Set());
   const [maxCount, setMaxCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragMode, setDragMode] = useState<"add" | "remove">("add");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragMode, setDragMode] = useState<"add" | "remove">("add");
+
+  // saved = what's currently in DB, used to compute diff on save
+  const savedVotesRef = useRef<Set<string>>(new Set());
   const myVotesRef = useRef<Set<string>>(new Set());
+
+  const hasChanges = (() => {
+    const saved = savedVotesRef.current;
+    const current = myVotesRef.current;
+    if (saved.size !== current.size) return true;
+    for (const d of current) if (!saved.has(d)) return true;
+    return false;
+  })();
 
   const fetchVotes = useCallback(async () => {
     setLoading(true);
+    setSaveError(null);
     const { data } = await supabase
       .from("votes")
       .select("date, members(name)")
@@ -53,25 +65,16 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
     }
 
     setVoteMap(map);
-    setMyVotes(mine);
-    myVotesRef.current = mine;
+    setMyVotes(new Set(mine));
+    myVotesRef.current = new Set(mine);
+    savedVotesRef.current = new Set(mine);
     setMaxCount(Math.max(0, ...Object.values(map).map((m) => m.length)));
     setLoading(false);
   }, [year, month, userName]);
 
   useEffect(() => { fetchVotes(); }, [fetchVotes]);
 
-  const getCellOpacity = (count: number): string => {
-    if (maxCount === 0 || count === 0) return "0";
-    const ratio = count / maxCount;
-    if (ratio >= 1) return "0.85";
-    if (ratio >= 0.75) return "0.6";
-    if (ratio >= 0.5) return "0.4";
-    if (ratio >= 0.25) return "0.25";
-    return "0.12";
-  };
-
-  async function saveVote(dateStr: string, action: "add" | "remove") {
+  async function handleSave() {
     setSaving(true);
     setSaveError(null);
     try {
@@ -80,53 +83,53 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
       if (!member) {
         throw new Error(`'${userName}'이(가) 멤버 목록에 없어요. 멤버 페이지에서 먼저 등록해주세요.`);
       }
-      if (action === "add") {
-        const { error } = await supabase.from("votes").upsert(
-          [{ member_id: member.id, date: dateStr, year, month }],
+
+      const saved = savedVotesRef.current;
+      const current = myVotesRef.current;
+
+      const toAdd = [...current].filter(d => !saved.has(d));
+      const toRemove = [...saved].filter(d => !current.has(d));
+
+      await Promise.all([
+        toAdd.length > 0 && supabase.from("votes").upsert(
+          toAdd.map(date => ({ member_id: member.id, date, year, month })),
           { onConflict: "member_id,date" }
-        );
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("votes")
-          .delete().eq("member_id", member.id).eq("date", dateStr);
-        if (error) throw error;
-      }
+        ),
+        ...toRemove.map(date =>
+          supabase.from("votes").delete().eq("member_id", member.id).eq("date", date)
+        ),
+      ]);
+
+      savedVotesRef.current = new Set(current);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "저장에 실패했어요. 다시 시도해주세요.";
       setSaveError(msg);
-      fetchVotes();
     } finally {
       setSaving(false);
     }
   }
 
   function toggleDate(dateStr: string) {
-    const isSelected = myVotesRef.current.has(dateStr);
+    const next = new Set(myVotesRef.current);
+    const isSelected = next.has(dateStr);
+    if (isSelected) next.delete(dateStr);
+    else next.add(dateStr);
+    myVotesRef.current = next;
 
-    // Update ref immediately so drag and debounce always see current state
-    const nextVotes = new Set(myVotesRef.current);
-    if (isSelected) nextVotes.delete(dateStr);
-    else nextVotes.add(dateStr);
-    myVotesRef.current = nextVotes;
-
-    // Optimistic UI update
-    setMyVotes(new Set(nextVotes));
+    setMyVotes(new Set(next));
     setVoteMap((prev) => {
-      const next = { ...prev };
+      const updated = { ...prev };
       if (isSelected) {
-        next[dateStr] = (next[dateStr] || []).filter((n) => n !== userName);
-        if (next[dateStr].length === 0) delete next[dateStr];
+        updated[dateStr] = (updated[dateStr] || []).filter(n => n !== userName);
+        if (updated[dateStr].length === 0) delete updated[dateStr];
       } else {
-        next[dateStr] = [...(next[dateStr] || []), userName];
+        updated[dateStr] = [...(updated[dateStr] || []), userName];
       }
-      setMaxCount(Math.max(0, ...Object.values(next).map((m) => m.length)));
-      return next;
+      setMaxCount(Math.max(0, ...Object.values(updated).map(m => m.length)));
+      return updated;
     });
-
-    saveVote(dateStr, isSelected ? "remove" : "add");
   }
 
-  // Drag handling
   function handleMouseDown(dateStr: string, e: React.MouseEvent) {
     e.preventDefault();
     const isSelected = myVotesRef.current.has(dateStr);
@@ -148,16 +151,24 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   }
 
   useEffect(() => {
-    const handleUp = () => {
-      if (isDragging) setIsDragging(false);
-    };
+    const handleUp = () => setIsDragging(false);
     window.addEventListener("mouseup", handleUp);
     window.addEventListener("touchend", handleUp);
     return () => {
       window.removeEventListener("mouseup", handleUp);
       window.removeEventListener("touchend", handleUp);
     };
-  }, [isDragging]);
+  }, []);
+
+  const getCellOpacity = (count: number): string => {
+    if (maxCount === 0 || count === 0) return "0";
+    const ratio = count / maxCount;
+    if (ratio >= 1) return "0.85";
+    if (ratio >= 0.75) return "0.6";
+    if (ratio >= 0.5) return "0.4";
+    if (ratio >= 0.25) return "0.25";
+    return "0.12";
+  };
 
   function prevMonth() {
     if (month === 1) { setYear(y => y - 1); setMonth(12); }
@@ -172,7 +183,6 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const firstDay = getFirstDayOfMonth(year, month);
   const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
 
-  // Summary: top dates
   const sortedDates = Object.entries(voteMap)
     .filter(([, members]) => members.length > 0)
     .sort(([, a], [, b]) => b.length - a.length)
@@ -180,21 +190,16 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
 
   return (
     <div className="space-y-4">
-      {/* Month nav */}
+      {/* Calendar card */}
       <div className="glass-card rounded-2xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a2540]">
           <button onClick={prevMonth}
             className="p-2 rounded-xl text-[#6b7fa3] hover:text-[#38d1f7] hover:bg-[#38d1f7]/10 transition-all active:scale-90">
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-[#e8f0ff]">
-              {year}년 {MONTHS_KR[month - 1]}
-            </h2>
-            {saving && (
-              <span className="text-[10px] text-[#6b7fa3] animate-pulse">저장 중...</span>
-            )}
-          </div>
+          <h2 className="text-base font-bold text-[#e8f0ff]">
+            {year}년 {MONTHS_KR[month - 1]}
+          </h2>
           <button onClick={nextMonth}
             className="p-2 rounded-xl text-[#6b7fa3] hover:text-[#38d1f7] hover:bg-[#38d1f7]/10 transition-all active:scale-90">
             <ChevronRight className="w-4 h-4" />
@@ -254,19 +259,15 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
                     applyDrag(dateStr, isSelected ? "remove" : "add");
                   } : undefined}
                 >
-                  {/* Vote fill */}
                   {isValid && count > 0 && (
                     <div
                       className="absolute inset-0 bg-[#38d1f7] transition-all duration-300"
                       style={{ opacity }}
                     />
                   )}
-
-                  {/* My selection indicator */}
                   {isSelected && (
                     <div className="absolute inset-0 border-2 border-[#39ff88] rounded-sm pointer-events-none" />
                   )}
-
                   {isValid && (
                     <div className="relative z-10 p-1.5 h-full flex flex-col justify-between">
                       <span className={cn(
@@ -290,6 +291,21 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
           </div>
         )}
       </div>
+
+      {/* Save button */}
+      <button
+        onClick={handleSave}
+        disabled={!hasChanges || saving}
+        className={cn(
+          "w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200",
+          hasChanges
+            ? "bg-[#39ff88] text-[#080c14] hover:bg-[#39ff88]/90 active:scale-[0.98] glow-green"
+            : "bg-[#0d1421] border border-[#1a2540] text-[#2a3a5a] cursor-not-allowed"
+        )}
+      >
+        <Check className="w-4 h-4" />
+        {saving ? "저장 중..." : hasChanges ? "저장하기" : "저장됨"}
+      </button>
 
       {/* Save error */}
       {saveError && (
