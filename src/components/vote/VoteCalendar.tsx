@@ -26,13 +26,10 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragMode, setDragMode] = useState<"add" | "remove">("add");
 
   // saved = what's currently in DB, used to compute diff on save
   const savedVotesRef = useRef<Set<string>>(new Set());
   const myVotesRef = useRef<Set<string>>(new Set());
-  const lastTouchRef = useRef(0);
 
   const hasChanges = (() => {
     const saved = savedVotesRef.current;
@@ -131,36 +128,6 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
     });
   }
 
-  function handleMouseDown(dateStr: string, e: React.MouseEvent) {
-    if (Date.now() - lastTouchRef.current < 500) return; // 터치 후 발생하는 시뮬레이션된 mousedown 무시
-    e.preventDefault();
-    const isSelected = myVotesRef.current.has(dateStr);
-    setDragMode(isSelected ? "remove" : "add");
-    setIsDragging(true);
-    applyDrag(dateStr, isSelected ? "remove" : "add");
-  }
-
-  function handleMouseEnter(dateStr: string) {
-    if (!isDragging) return;
-    applyDrag(dateStr, dragMode);
-  }
-
-  function applyDrag(dateStr: string, mode: "add" | "remove") {
-    const isSelected = myVotesRef.current.has(dateStr);
-    if (mode === "add" && isSelected) return;
-    if (mode === "remove" && !isSelected) return;
-    toggleDate(dateStr);
-  }
-
-  useEffect(() => {
-    const handleUp = () => setIsDragging(false);
-    window.addEventListener("mouseup", handleUp);
-    window.addEventListener("touchend", handleUp);
-    return () => {
-      window.removeEventListener("mouseup", handleUp);
-      window.removeEventListener("touchend", handleUp);
-    };
-  }, []);
 
   const getCellOpacity = (count: number): string => {
     if (maxCount === 0 || count === 0) return "0";
@@ -228,10 +195,7 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
             ))}
           </div>
         ) : (
-          <div
-            className="grid grid-cols-7 select-none"
-            onMouseLeave={() => isDragging && setIsDragging(false)}
-          >
+          <div className="grid grid-cols-7">
             {Array.from({ length: totalCells }).map((_, idx) => {
               const dayNum = idx - firstDay + 1;
               const isValid = dayNum >= 1 && dayNum <= daysInMonth;
@@ -247,20 +211,11 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
                   key={idx}
                   className={cn(
                     "relative h-14 border-b border-r border-[#1a2540]/40 transition-all duration-150",
-                    isValid && "cursor-pointer calendar-cell",
+                    isValid && "cursor-pointer calendar-cell active:scale-95",
                     !isValid && "opacity-0",
                     isTopDate && "ring-1 ring-inset ring-[#38d1f7]/40"
                   )}
-                  onMouseDown={isValid ? (e) => handleMouseDown(dateStr, e) : undefined}
-                  onMouseEnter={isValid ? () => handleMouseEnter(dateStr) : undefined}
-                  onTouchStart={isValid ? (e) => {
-                    e.preventDefault();
-                    lastTouchRef.current = Date.now();
-                    const isSelected = myVotesRef.current.has(dateStr);
-                    setDragMode(isSelected ? "remove" : "add");
-                    setIsDragging(true);
-                    applyDrag(dateStr, isSelected ? "remove" : "add");
-                  } : undefined}
+                  onClick={isValid ? () => toggleDate(dateStr) : undefined}
                 >
                   {isValid && count > 0 && (
                     <div
