@@ -32,6 +32,7 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   // saved = what's currently in DB, used to compute diff on save
   const savedVotesRef = useRef<Set<string>>(new Set());
   const myVotesRef = useRef<Set<string>>(new Set());
+  const lastTouchRef = useRef(0);
 
   const hasChanges = (() => {
     const saved = savedVotesRef.current;
@@ -131,6 +132,7 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   }
 
   function handleMouseDown(dateStr: string, e: React.MouseEvent) {
+    if (Date.now() - lastTouchRef.current < 500) return; // 터치 후 발생하는 시뮬레이션된 mousedown 무시
     e.preventDefault();
     const isSelected = myVotesRef.current.has(dateStr);
     setDragMode(isSelected ? "remove" : "add");
@@ -253,6 +255,7 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
                   onMouseEnter={isValid ? () => handleMouseEnter(dateStr) : undefined}
                   onTouchStart={isValid ? (e) => {
                     e.preventDefault();
+                    lastTouchRef.current = Date.now();
                     const isSelected = myVotesRef.current.has(dateStr);
                     setDragMode(isSelected ? "remove" : "add");
                     setIsDragging(true);
