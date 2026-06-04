@@ -23,6 +23,7 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const [voteMap, setVoteMap] = useState<VoteMap>({});
   const [myVotes, setMyVotes] = useState<Set<string>>(new Set());
   const [maxCount, setMaxCount] = useState(0);
+  const [allMembers, setAllMembers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -42,17 +43,16 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const fetchVotes = useCallback(async () => {
     setLoading(true);
     setSaveError(null);
-    const { data } = await supabase
-      .from("votes")
-      .select("date, members(name)")
-      .eq("year", year)
-      .eq("month", month);
+    const [votesRes, membersRes] = await Promise.all([
+      supabase.from("votes").select("date, members(name)").eq("year", year).eq("month", month),
+      supabase.from("members").select("name").order("name"),
+    ]);
 
     const map: VoteMap = {};
     const mine = new Set<string>();
 
-    if (data) {
-      data.forEach((v) => {
+    if (votesRes.data) {
+      votesRes.data.forEach((v) => {
         const memberName = (v.members as unknown as { name: string } | null)?.name;
         if (!map[v.date]) map[v.date] = [];
         if (memberName) {
@@ -61,6 +61,8 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
         }
       });
     }
+
+    if (membersRes.data) setAllMembers(membersRes.data.map((m) => m.name));
 
     setVoteMap(map);
     setMyVotes(new Set(mine));
@@ -155,7 +157,10 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
   const sortedDates = Object.entries(voteMap)
     .filter(([, members]) => members.length > 0)
     .sort(([, a], [, b]) => b.length - a.length)
-    .slice(0, 3);
+    .slice(0, 5);
+
+  const votedAny = new Set(Object.values(voteMap).flat());
+  const notVotedAtAll = allMembers.filter((m) => !votedAny.has(m));
 
   return (
     <div className="space-y-4">
@@ -289,40 +294,89 @@ export default function VoteCalendar({ initialYear, initialMonth, userName }: Pr
       </div>
 
       {/* Summary */}
-      {sortedDates.length > 0 && (
-        <div className="glass-card rounded-2xl p-5">
-          <h3 className="text-sm font-semibold text-[#e8f0ff] mb-3">투표 요약</h3>
-          <div className="space-y-2">
-            {sortedDates.map(([date, members], idx) => {
-              const d = new Date(date + "T00:00:00");
-              const days = ["일", "월", "화", "수", "목", "금", "토"];
-              const label = `${d.getMonth() + 1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
-              return (
-                <div key={date} className={cn(
-                  "flex items-start gap-3 px-3 py-2.5 rounded-xl",
-                  idx === 0 ? "bg-[#38d1f7]/10 border border-[#38d1f7]/20" : "bg-[#0d1421]"
-                )}>
-                  <span className={cn(
-                    "text-xs font-bold w-5 flex-shrink-0 text-center mt-0.5",
-                    idx === 0 ? "text-[#38d1f7]" : "text-[#6b7fa3]"
-                  )}>
-                    {idx + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className={cn("text-sm font-medium", idx === 0 ? "text-[#e8f0ff]" : "text-[#a0b0d0]")}>
-                      {label}
-                    </p>
-                    <p className="text-xs text-[#6b7fa3] truncate mt-0.5">
-                      {members.join(", ")}
-                    </p>
-                  </div>
-                  <span className={cn("text-sm font-bold flex-shrink-0", idx === 0 ? "text-[#39ff88]" : "text-[#6b7fa3]")}>
-                    {members.length}명
-                  </span>
-                </div>
-              );
-            })}
+      {(sortedDates.length > 0 || notVotedAtAll.length > 0) && (
+        <div className="glass-card rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-[#1a2540]">
+            <h3 className="text-sm font-semibold text-[#e8f0ff]">투표 현황</h3>
           </div>
+
+          {sortedDates.length > 0 && (
+            <div className="divide-y divide-[#1a2540]">
+              {sortedDates.map(([date, voters], idx) => {
+                const d = new Date(date + "T00:00:00");
+                const days = ["일", "월", "화", "수", "목", "금", "토"];
+                const label = `${d.getMonth() + 1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
+                const absent = allMembers.filter((m) => !voters.includes(m));
+                const isTop = idx === 0;
+
+                return (
+                  <div key={date} className={cn("px-5 py-4", isTop && "bg-[#38d1f7]/5")}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        {isTop && <span className="text-[10px] font-bold text-[#38d1f7] bg-[#38d1f7]/15 px-2 py-0.5 rounded-full">최다</span>}
+                        <span className={cn("text-sm font-semibold", isTop ? "text-[#e8f0ff]" : "text-[#a0b0d0]")}>
+                          {label}
+                        </span>
+                      </div>
+                      <span className={cn("text-sm font-bold", isTop ? "text-[#39ff88]" : "text-[#6b7fa3]")}>
+                        {voters.length}/{allMembers.length || voters.length}명
+                      </span>
+                    </div>
+
+                    {/* 가능 */}
+                    {voters.length > 0 && (
+                      <div className="flex items-start gap-2 mb-2">
+                        <span className="text-[10px] text-[#39ff88] font-medium w-8 pt-0.5 flex-shrink-0">가능</span>
+                        <div className="flex flex-wrap gap-1">
+                          {voters.map((name) => (
+                            <span key={name} className={cn(
+                              "text-[11px] px-2 py-0.5 rounded-full border font-medium",
+                              name === userName
+                                ? "bg-[#39ff88]/20 border-[#39ff88]/40 text-[#39ff88]"
+                                : "bg-[#39ff88]/10 border-[#39ff88]/20 text-[#39ff88]"
+                            )}>
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 미응답 */}
+                    {absent.length > 0 && (
+                      <div className="flex items-start gap-2">
+                        <span className="text-[10px] text-[#2a3a5a] font-medium w-8 pt-0.5 flex-shrink-0">미응답</span>
+                        <div className="flex flex-wrap gap-1">
+                          {absent.map((name) => (
+                            <span key={name} className="text-[11px] px-2 py-0.5 rounded-full border border-[#1a2540] bg-[#0d1421] text-[#3a4a6a]">
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 이번 달 아예 투표 안 한 멤버 */}
+          {notVotedAtAll.length > 0 && (
+            <div className="px-5 py-4 border-t border-[#1a2540] bg-[#ff2d9b]/5">
+              <div className="flex items-start gap-2">
+                <span className="text-[10px] text-[#ff2d9b] font-medium pt-0.5 flex-shrink-0">미투표</span>
+                <div className="flex flex-wrap gap-1">
+                  {notVotedAtAll.map((name) => (
+                    <span key={name} className="text-[11px] px-2 py-0.5 rounded-full border border-[#ff2d9b]/20 bg-[#ff2d9b]/10 text-[#ff2d9b]">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[10px] text-[#6b7fa3] mt-2">이번 달 아직 투표 안 함</p>
+            </div>
+          )}
         </div>
       )}
     </div>
